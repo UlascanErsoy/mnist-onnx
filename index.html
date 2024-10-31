@@ -183,13 +183,9 @@
                 const reader = new FileReader();
                 reader.onload = async function(e) {
                     const arrayBuffer = e.target.result;
-                    try {
-                        session = await ort.InferenceSession.create(arrayBuffer);
-                        alert('Model loaded successfully!');
-                        document.getElementById('predictButton').disabled = false;
-                    } catch (err) {
-                        alert('Failed to load the model. Error: ' + err.message);
-                    }
+                    session = await ort.InferenceSession.create(arrayBuffer);
+                    alert('Model loaded successfully!');
+                    document.getElementById('predictButton').disabled = false;
                 };
                 reader.readAsArrayBuffer(file);
             }
