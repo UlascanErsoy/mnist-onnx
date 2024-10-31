@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>MNIST Digit Recognition</title>
+    <style>
+        #canvas {
+            border: 1px solid black;
+            touch-action: none; /* Prevent default touch actions like scrolling */
+        }
+        svg {
+           font-family: 'Arial', sans-serif;
+        }
+        .bar {
+           fill: steelblue;
+        }
+        .bar:hover {
+           fill: orange;
+        }
+
+        circle {
+           fill: steelblue;
+        }
+        circle:hover {
+           fill: orange;
+        }
+
+        #tooltip {
+           position: absolute;
+           opacity: 0;
+           background: lightgray;
+           padding: 5px;
+           border-radius: 5px;
+           pointer-events: none; 
+        }
+
+
+    </style>
+</head>
+<body>
+    <h1>MNIST Digit Recognition</h1>
+    <input type="file" id="modelUpload" accept=".onnx" />
+    <button id="clearButton">Clear</button>
+    <br><br>
+    <canvas id="canvas" width="280" height="280"></canvas>
+    <br>
+    <h1 id="prediction"></h1>
+    <div id="chart">
+    </div>
+
+    <!-- Include ONNX Runtime Web script -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <script>
+        let session;
+        const [width, height] = [640, 400];    
+        const margin = {top:20, right:30, bottom:120, left:40 };
+
+        //create an SVG
+        const svg = d3.select("#chart")
+                        .append("svg")
+                        .attr("width", width + margin.left + margin.right)
+                        .attr("height", height + margin.bottom + margin.top)
+                        .append("g")
+                        .attr("transform", `translate(${margin.left}, ${margin.right})`);
+
+        //set up our scales
+        const x = d3.scaleBand()
+                    .domain(d3.range(10))
+                    .range([0, width])
+                    .padding(0.1);
+
+        const y = d3.scaleLinear()
+                    .domain([0, 1.0])
+                    .range([height, 0]);
+
+        x_axis = d3.axisBottom(x)
+        y_axis = d3.axisLeft(y)
+
+        svg.append("g")
+            .attr("transform", `translate(0 , ${height})`)
+            .call(x_axis);
+
+        svg.append("g")
+            .call(y_axis);
+
+
+        svg.append("text")
+            .attr("class", "x label")
+            .attr("text-anchor", "end")
+            .attr("x", width / 2)
+            .attr("y", height + 40)
+            .text("Label");
+
+        svg.append("text")
+            .attr("class", "y label")
+            .attr("text-anchor", "end")
+            .attr("y", -40)
+            .attr("x", -height/2 + 22.5)
+            .attr("dy", ".75em")
+            .attr("transform", "rotate(-90)")
+            .text("Probabilities");
+        const tooltip = d3.select("#tooltip");
+
+        //Add tooltip functionality
+        svg.selectAll(".bar")
+            .on("mouseover", function(event, d) {
+                //show the tooltip
+                tooltip.style("opacity", 1)
+                    .html(`Value:${d}`)
+                               })
+            .on("mousemove", function(event) {
+                tooltip
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 20) + "px");
+
+            })
+            .on("mouseout", function() {
+                tooltip.style("opacity", 0);
+            });
+        
+        const softmax = arr => {
+            const max = Math.max(...arr);
+            const exps = arr.map(x => Math.exp(x - max));
+            const sum = exps.reduce((a, b) => a + b, 0);
+            return exps.map(e => e / sum);
+        };
+
+        const runPred = async () => {
+            if (!session) {
+                alert('Please load a model first.');
+                return;
+            }
+
+            let input = preprocessCanvas(canvas);
+
+            // Create a tensor
+            let tensor = new ort.Tensor('float32', input, [1, 1, 28, 28]);
+
+            // Run inference
+            const feeds = {};
+            feeds[session.inputNames[0]] = tensor;
+            const results = await session.run(feeds);
+            const output = results[session.outputNames[0]].data;
+
+            // Find the index of the maximum value
+            let maxProb = -Infinity;
+            let maxIndex = -1;
+            for (let i = 0; i < output.length; i++) {
+                if (output[i] > maxProb) {
+                    maxProb = output[i];
+                    maxIndex = i;
+                }
+            }
+
+            const data = softmax(output);
+
+            const bars = svg.selectAll(".bar")
+                            .data(data, (d, i) => i);
+            bars.exit().remove();
+
+            const barsEnter = bars.enter().append("rect")
+                .attr("class", "bar")
+                .attr("x", (d, i) => x(i))
+                .attr("width", x.bandwidth())
+                .attr("y", y(0))
+                .attr("height", 0);
+
+            const barsUpdate = barsEnter.merge(bars);
+
+            barsUpdate
+                .attr("x", (d, i) => x(i))
+                .attr("width", x.bandwidth())
+                .attr("y", d => y(d))
+                .attr("height", d => height - y(d));
+
+
+            document.getElementById('prediction').innerText = `Prediction: ${maxIndex}`;
+        };
+        document.getElementById('modelUpload').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = async function(e) {
+                    const arrayBuffer = e.target.result;
+                    try {
+                        session = await ort.InferenceSession.create(arrayBuffer);
+                        alert('Model loaded successfully!');
+                        document.getElementById('predictButton').disabled = false;
+                    } catch (err) {
+                        alert('Failed to load the model. Error: ' + err.message);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        // Drawing on canvas
+        let canvas = document.getElementById('canvas');
+        let ctx = canvas.getContext('2d');
+
+        let isDrawing = false;
+
+        canvas.addEventListener('mousedown', e => {
+            isDrawing = true;
+            ctx.lineWidth = 20;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(e.offsetX, e.offsetY);
+        });
+
+        canvas.addEventListener('mouseleave', e => {
+            if (isDrawing) {
+                ctx.closePath();
+                isDrawing = false;
+            }
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (isDrawing) {
+                ctx.lineTo(e.offsetX, e.offsetY);
+                ctx.stroke();
+                runPred();
+            }
+        });
+
+        canvas.addEventListener('mouseup', e => {
+            isDrawing = false;
+        });
+
+        // Touch support for mobile devices
+        canvas.addEventListener('touchstart', e => {
+            if (e.touches.length == 1) {
+                e.preventDefault();
+                let touch = e.touches[0];
+                let rect = canvas.getBoundingClientRect();
+                let x = touch.clientX - rect.left;
+                let y = touch.clientY - rect.top;
+                isDrawing = true;
+                ctx.lineWidth = 20;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(x, y);
+            }
+        });
+
+        canvas.addEventListener('touchmove', e => {
+            if (e.touches.length == 1 && isDrawing) {
+                e.preventDefault();
+                let touch = e.touches[0];
+                let rect = canvas.getBoundingClientRect();
+                let x = touch.clientX - rect.left;
+                let y = touch.clientY - rect.top;
+                ctx.lineTo(x, y);
+                ctx.stroke();
+            }
+        });
+
+        canvas.addEventListener('touchend', e => {
+            isDrawing = false;
+        });
+
+        document.getElementById('clearButton').addEventListener('click', () => {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            document.getElementById('prediction').innerText = '';
+        });
+
+        function preprocessCanvas(canvas) {
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = 28;
+            tempCanvas.height = 28;
+            let tempCtx = tempCanvas.getContext('2d');
+
+            // Draw the canvas image into the temp canvas
+            tempCtx.drawImage(canvas, 0, 0, 28, 28);
+
+            // Get the image data from the temp canvas
+            let imageData = tempCtx.getImageData(0, 0, 28, 28);
+            let data = imageData.data;
+
+            // Grayscale and normalize the pixel data
+            let grayscaleData = new Float32Array(28 * 28);
+            for (let i = 0; i < data.length; i += 4) {
+                // Invert colors: MNIST dataset has white digits on black background
+                let grayscale = data[i + 3] / 255.0;
+                grayscaleData[i / 4] = grayscale;
+            }
+
+            return grayscaleData;
+        }
+
+    </script>
+</body>
+</html>
+
